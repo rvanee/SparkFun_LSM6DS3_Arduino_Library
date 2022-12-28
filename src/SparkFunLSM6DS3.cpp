@@ -270,6 +270,28 @@ status_t LSM6DS3Core::readRegisterInt16( int16_t* outputPointer, uint8_t offset 
 
 //****************************************************************************//
 //
+//  readRegisterUInt24
+//
+//  Parameters:
+//    *outputPointer -- Pass &variable (base address of) to save read data to
+//    offset -- register to read
+//
+//  Note that although this function reads 24 bits, they are stored in a 32
+//  bit word (24 LSB bits) - the upper 8 bits are set to 0.
+//
+//****************************************************************************//
+status_t LSM6DS3Core::readRegisterUInt24( uint32_t* outputPointer, uint8_t offset )
+{
+	uint8_t myBuffer[3];
+	status_t returnError = readRegisterRegion(myBuffer, offset, 3);  //Does memory transfer
+	uint32_t output = (uint32_t)myBuffer[0] | uint32_t(myBuffer[1] << 8) | uint32_t(myBuffer[2] << 16);
+	
+	*outputPointer = output;
+	return returnError;
+}
+
+//****************************************************************************//
+//
 //  writeRegister
 //
 //  Parameters:
@@ -367,6 +389,15 @@ LSM6DS3::LSM6DS3( uint8_t busType, uint8_t inputArg ) : LSM6DS3Core( busType, in
 	allOnesCounter = 0;
 	nonSuccessCounter = 0;
 
+	//Timestamp settings
+	settings.timerHREnabled = 1; //Timestamp 1LSB = 25 μs
+	settings.timerFifoEnabled = 0;	//Set to include timestamp (+pedometer) in the FIFO (3rd set)
+	settings.timerFifoDecimation = 1;  //set 1 for on /1
+
+	// High-performance settings
+	settings.gyroHighPerformance = 1;
+	settings.accelHighPerformance = 1;
+
 }
 
 //****************************************************************************//
@@ -407,13 +438,18 @@ status_t LSM6DS3::begin(SensorSettings* pSettingsYouWanted)
 		pSettingsYouWanted->fifoThreshold = settings.fifoThreshold;
 		pSettingsYouWanted->fifoSampleRate = settings.fifoSampleRate;
 		pSettingsYouWanted->fifoModeWord = settings.fifoModeWord;
+		pSettingsYouWanted->timerHREnabled = settings.timerHREnabled;
+		pSettingsYouWanted->timerFifoEnabled = settings.timerFifoEnabled;
+		pSettingsYouWanted->timerFifoDecimation = settings.timerFifoDecimation;
+		pSettingsYouWanted->gyroHighPerformance = settings.gyroHighPerformance;
+		pSettingsYouWanted->accelHighPerformance = settings.accelHighPerformance;
 	}
 
 	//Setup the accelerometer******************************
 	dataToWrite = 0; //Start Fresh!
 	if ( settings.accelEnabled == 1) {
 		//Build config reg
-		//First patch in filter bandwidth
+		//First patch in analog anti-aliasing low pass filter bandwidth
 		switch (settings.accelBandWidth) {
 		case 50:
 			dataToWrite |= LSM6DS3_ACC_GYRO_BW_XL_50Hz;
@@ -494,13 +530,21 @@ status_t LSM6DS3::begin(SensorSettings* pSettingsYouWanted)
 	//Now, write the patched together data
 	writeRegister(LSM6DS3_ACC_GYRO_CTRL1_XL, dataToWrite);
 
-	//Set the ODR bit
+	//Set the ODR bit (analog anti-aliasing LPF bandwidth selection)
 	readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL4_C);
 	dataToWrite &= ~((uint8_t)LSM6DS3_ACC_GYRO_BW_SCAL_ODR_ENABLED);
 	if ( settings.accelODROff == 1) {
 		dataToWrite |= LSM6DS3_ACC_GYRO_BW_SCAL_ODR_ENABLED;
 	}
 	writeRegister(LSM6DS3_ACC_GYRO_CTRL4_C, dataToWrite);
+
+	//Set the XL_HM_MODE bit
+	readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL6_G);
+	dataToWrite &= ~((uint8_t)LSM6DS3_ACC_GYRO_LP_XL_ENABLED);
+	if ( settings.accelHighPerformance == 0) {
+		dataToWrite |= LSM6DS3_ACC_GYRO_LP_XL_ENABLED;
+	}
+	writeRegister(LSM6DS3_ACC_GYRO_CTRL6_G, dataToWrite);
 
 	//Setup the gyroscope**********************************************
 	dataToWrite = 0; //Start Fresh!
@@ -563,13 +607,34 @@ status_t LSM6DS3::begin(SensorSettings* pSettingsYouWanted)
 	//Write the byte
 	writeRegister(LSM6DS3_ACC_GYRO_CTRL2_G, dataToWrite);
 
-	//Setup the internal temperature sensor
-	if ( settings.tempEnabled == 1) {
+	//Set the G_HM_MODE bit
+	readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL7_G);
+	dataToWrite &= ~((uint8_t)LSM6DS3_ACC_GYRO_LP_EN_ENABLED);
+	if ( settings.accelHighPerformance == 0) {
+		dataToWrite |= LSM6DS3_ACC_GYRO_LP_EN_ENABLED;
+	}
+	writeRegister(LSM6DS3_ACC_GYRO_CTRL7_G, dataToWrite);
+
+	//Internal temperature sensor is on whenever the accelerometer
+	//is running.
+	//Note that it is possible to have temperature sensor data
+	//stored in the FIFO, but this has not been implemented,
+	//mostly because either timestamp or temperature data (but
+	//not both!) can be stored in the FIFO.
+	if ( settings.tempEnabled == 1 ) {
 	}
 
-	//Return WHO AM I reg  //Not no mo!
-	uint8_t result;
-	readRegister(&result, LSM6DS3_ACC_GYRO_WHO_AM_I_REG);
+	//Set timestamp resolution
+	//Note that setting the timestamp to high resolution will
+	//prevent it from rolling over beyond 0xFFFFFF; it will
+	//have to be reset to 0x000000 by writing 0xAA to
+	//LSM6DS3_ACC_GYRO_TIMESTAMP2_REG (see data sheet).
+	readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_WAKE_UP_DUR);
+	dataToWrite &= ~((uint8_t)LSM6DS3_ACC_GYRO_TIMER_HR_25us);
+	if ( settings.timerHREnabled == 1) {
+		dataToWrite |= LSM6DS3_ACC_GYRO_TIMER_HR_25us;
+	}
+	writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_DUR, dataToWrite);
 
 	return returnError;
 }
@@ -768,6 +833,46 @@ float LSM6DS3::readTempF( void )
 
 	return output;
 
+}
+
+//****************************************************************************//
+//
+//  Self-test section
+//
+//****************************************************************************//
+void LSM6DS3::setSelfTestAccel( uint8_t selftest_config )
+{
+	uint8_t dataToWrite = 0;  //Temporary variable
+	readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL5_C);
+	dataToWrite &= ~LSM6DS3_ACC_GYRO_ST_XL_NA;
+	dataToWrite |= selftest_config;
+	writeRegister(LSM6DS3_ACC_GYRO_CTRL5_C, dataToWrite);
+}
+
+void LSM6DS3::setSelfTestGyro( uint8_t selftest_config )
+{
+	uint8_t dataToWrite = 0;  //Temporary variable
+	readRegister(&dataToWrite, LSM6DS3_ACC_GYRO_CTRL5_C);
+	dataToWrite &= ~LSM6DS3_ACC_GYRO_ST_G_NEG_SIGN_TEST;
+	dataToWrite |= selftest_config;
+	writeRegister(LSM6DS3_ACC_GYRO_CTRL5_C, dataToWrite);
+}
+
+//****************************************************************************//
+//
+//  Timestamp section
+//
+//****************************************************************************//
+void LSM6DS3::resetTimestamp( void )
+{
+	writeRegister(LSM6DS3_ACC_GYRO_TIMESTAMP2_REG, LSM6DS3_ACC_GYRO_TIMESTAMP_RESET_PATTERN);
+}
+
+uint32_t LSM6DS3::readTimestamp( void )
+{
+	uint32_t output; // Note that upper 8 bits will always be 0
+	readRegisterUInt24( &output, LSM6DS3_ACC_GYRO_TIMESTAMP0_REG );
+	return output;
 }
 
 //****************************************************************************//

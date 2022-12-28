@@ -72,6 +72,12 @@ public:
 	//Reads two 8-bit regs, LSByte then MSByte order, and concatenates them.
 	//  Acts as a 16-bit read operation
 	status_t readRegisterInt16(int16_t*, uint8_t offset );
+
+	//Reads three 8-bit regs, LSByte to MSByte order, and concatenates them.
+	//  Acts as a 24-bit read operation
+	//  Note that the result is stored in a 32 bit integer, with the upper
+	//  8 bits set to 0.
+	status_t readRegisterUInt24(uint32_t*, uint8_t offset );
 	
 	//Writes an 8-bit byte;
 	status_t writeRegister(uint8_t, uint8_t);
@@ -124,6 +130,15 @@ public:
 	uint16_t fifoThreshold;
 	int16_t fifoSampleRate;
 	uint8_t fifoModeWord;
+
+	//Timestamp settings
+	uint8_t timerHREnabled;
+	uint8_t timerFifoEnabled;
+	uint8_t timerFifoDecimation;
+
+	// High-performance settings
+	uint8_t gyroHighPerformance;
+	uint8_t accelHighPerformance;
 	
 };
 
@@ -172,6 +187,14 @@ public:
 	int16_t readRawTemp( void );
 	float readTempC( void );
 	float readTempF( void );
+
+	//Self-test
+	void setSelfTestAccel( uint8_t selftest_config );
+	void setSelfTestGyro( uint8_t selftest_config );
+
+	//Timestamp
+	void resetTimestamp( void );
+	uint32_t readTimestamp( void );
 
 	//FIFO stuff
 	void fifoBegin( void );
@@ -1640,6 +1663,14 @@ typedef enum {
 #define  	LSM6DS3_ACC_GYRO_FIFO_STATUS3_PATTERN_POSITION  	0
 #define  	LSM6DS3_ACC_GYRO_FIFO_STATUS4_PATTERN_MASK  	0x03
 #define  	LSM6DS3_ACC_GYRO_FIFO_STATUS4_PATTERN_POSITION  	0
+
+/*******************************************************************************
+* Register      : TIMESTAMP2_REG
+* Address       : 0X42
+* Bit Group Name: MP2
+* Permission    : RW
+*******************************************************************************/
+#define  	LSM6DS3_ACC_GYRO_TIMESTAMP_RESET_PATTERN		0xAA
 
 /*******************************************************************************
 * Register      : FUNC_SRC
